@@ -48,13 +48,23 @@ class TokenCostTracker(BaseCallbackHandler):
         self.steps: List[Dict[str, Any]] = []
         self._start_time: float = time.time()
         self.elapsed_seconds: float = 0.0
+        self._call_start_times: Dict[UUID, float] = {}  # run_id → wall-clock start
 
     # -- LLM events ----------------------------------------------------------
 
-    def on_llm_start(self, serialized: Dict[str, Any], prompts: List[str], **kwargs):
+    def on_llm_start(
+        self,
+        serialized: Dict[str, Any],
+        prompts: List[str],
+        *,
+        run_id: UUID,
+        **kwargs,
+    ):
         self.llm_calls += 1
+        self._call_start_times[run_id] = time.time()
 
-    def on_llm_end(self, response: LLMResult, **kwargs):
+    def on_llm_end(self, response: LLMResult, *, run_id: UUID, **kwargs):
+        elapsed = round(time.time() - self._call_start_times.pop(run_id, time.time()), 2)
         usage = {}
         if response.llm_output:
             usage = response.llm_output.get("token_usage", {})
@@ -69,13 +79,22 @@ class TokenCostTracker(BaseCallbackHandler):
                 "prompt_tokens": pt,
                 "completion_tokens": ct,
                 "total": pt + ct,
+                "elapsed_s": elapsed,
             }
         )
 
     # -- Chat model events (mirrors llm_end for chat models) ----------------
 
-    def on_chat_model_start(self, serialized: Dict[str, Any], messages: Any, **kwargs):
+    def on_chat_model_start(
+        self,
+        serialized: Dict[str, Any],
+        messages: Any,
+        *,
+        run_id: UUID,
+        **kwargs,
+    ):
         self.llm_calls += 1
+        self._call_start_times[run_id] = time.time()
 
     # -- Tool events ---------------------------------------------------------
 
@@ -87,11 +106,20 @@ class TokenCostTracker(BaseCallbackHandler):
         run_id: UUID,
         **kwargs,
     ):
+        self._call_start_times[run_id] = time.time()
         self.tool_calls += 1
         tool_name = serialized.get("name", "unknown")
         if "tavily" in tool_name.lower() or "search" in tool_name.lower():
             self.tavily_searches += 1
-        self.steps.append({"type": "tool", "name": tool_name, "input": input_str[:120]})
+        self.steps.append({"type": "tool", "name": tool_name, "input": input_str[:120], "elapsed_s": None})
+
+    def on_tool_end(self, output: Any, *, run_id: UUID, **kwargs):
+        elapsed = round(time.time() - self._call_start_times.pop(run_id, time.time()), 2)
+        # Patch elapsed into the most recent matching tool step
+        for step in reversed(self.steps):
+            if step.get("type") == "tool" and step.get("elapsed_s") is None:
+                step["elapsed_s"] = elapsed
+                break
 
     # -- Helpers -------------------------------------------------------------
 
@@ -155,8 +183,34 @@ def _format_node(state: ReportState) -> ReportState:
         f"  Estimated Cost     : ${s['estimated_cost_usd']:.5f} USD",
         f"  Wall-Clock Time    : {s['elapsed_seconds']}s",
         sep,
-        "",
     ]
+
+    # -- Per-step timing breakdown -----------------------------------------
+    llm_steps  = [step for step in t.steps if step["type"] == "llm"]
+    tool_steps = [step for step in t.steps if step["type"] == "tool"]
+
+    if llm_steps:
+        lines.append("")
+        lines.append("  LLM Call Breakdown:")
+        lines.append(f"  {'#':<4} {'Prompt':>8} {'Compl':>8} {'Total':>8} {'Time':>8}")
+        lines.append(f"  {'─'*4} {'─'*8} {'─'*8} {'─'*8} {'─'*8}")
+        for i, step in enumerate(llm_steps, 1):
+            t_str = f"{step.get('elapsed_s', '?')}s" if step.get('elapsed_s') is not None else "  —"
+            lines.append(
+                f"  {i:<4} {step['prompt_tokens']:>8,} {step['completion_tokens']:>8,} "
+                f"{step['total']:>8,} {t_str:>8}"
+            )
+
+    if tool_steps:
+        lines.append("")
+        lines.append("  Tool Call Breakdown:")
+        lines.append(f"  {'#':<4} {'Tool':<28} {'Time':>8}")
+        lines.append(f"  {'─'*4} {'─'*28} {'─'*8}")
+        for i, step in enumerate(tool_steps, 1):
+            t_str = f"{step.get('elapsed_s', '?')}s" if step.get('elapsed_s') is not None else "  —"
+            lines.append(f"  {i:<4} {step['name']:<28} {t_str:>8}")
+
+    lines += [sep, ""]
     state["report"] = "\n".join(lines)
     return state
 
