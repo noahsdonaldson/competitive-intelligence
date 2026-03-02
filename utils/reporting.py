@@ -61,8 +61,10 @@ class TokenCostTracker(BaseCallbackHandler):
         run_id: UUID,
         **kwargs,
     ):
-        self.llm_calls += 1
-        self._call_start_times[run_id] = time.time()
+        # Guard: on_chat_model_start may already have registered this run_id
+        if run_id not in self._call_start_times:
+            self.llm_calls += 1
+            self._call_start_times[run_id] = time.time()
 
     def on_llm_end(self, response: LLMResult, *, run_id: UUID, **kwargs):
         elapsed = round(time.time() - self._call_start_times.pop(run_id, time.time()), 2)
@@ -94,8 +96,10 @@ class TokenCostTracker(BaseCallbackHandler):
         run_id: UUID,
         **kwargs,
     ):
-        self.llm_calls += 1
-        self._call_start_times[run_id] = time.time()
+        # Guard: on_llm_start may already have registered this run_id
+        if run_id not in self._call_start_times:
+            self.llm_calls += 1
+            self._call_start_times[run_id] = time.time()
 
     # -- Tool events ---------------------------------------------------------
 
