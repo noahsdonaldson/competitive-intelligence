@@ -16,6 +16,7 @@ from langchain_core.outputs import LLMResult
 # Cost table (USD per 1K tokens) — update as pricing changes
 # ---------------------------------------------------------------------------
 COST_PER_1K_TOKENS: Dict[str, Dict[str, float]] = {
+    "gpt-5-mini": {"input": 0.00040, "output": 0.00160},  # verify at platform.openai.com/docs/pricing
     "gpt-4o": {"input": 0.0025, "output": 0.010},
     "gpt-4o-mini": {"input": 0.00015, "output": 0.0006},
     "gpt-4-turbo": {"input": 0.01, "output": 0.03},
@@ -24,7 +25,7 @@ COST_PER_1K_TOKENS: Dict[str, Dict[str, float]] = {
     "claude-3-haiku": {"input": 0.00025, "output": 0.00125},
 }
 
-DEFAULT_MODEL = "gpt-4o"
+DEFAULT_MODEL = "gpt-5-mini"
 
 
 # ---------------------------------------------------------------------------
